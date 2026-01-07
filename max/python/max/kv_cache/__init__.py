@@ -11,6 +11,16 @@
 # limitations under the License.
 # ===----------------------------------------------------------------------=== #
 
+from .external_backend import (
+    ExternalCacheLoadResult,
+    ExternalCacheLookupResult,
+    ExternalCacheStats,
+    ExternalCacheStoreResult,
+    ExternalKVCacheBackend,
+    NullExternalKVCacheBackend,
+    create_external_backend,
+    register_external_backend,
+)
 from .null_cache_manager import NullKVCacheManager
 from .paged_cache import (
     InsufficientBlocksError,
@@ -27,6 +37,16 @@ from .registry import (
 )
 
 __all__ = [
+    # External backend
+    "ExternalCacheLoadResult",
+    "ExternalCacheLookupResult",
+    "ExternalCacheStats",
+    "ExternalCacheStoreResult",
+    "ExternalKVCacheBackend",
+    "NullExternalKVCacheBackend",
+    "create_external_backend",
+    "register_external_backend",
+    # Existing exports
     "InsufficientBlocksError",
     "KVTransferEngine",
     "KVTransferEngineMetadata",

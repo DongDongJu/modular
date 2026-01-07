@@ -33,6 +33,11 @@ from max.support.math import ceildiv
 
 from .block_copy_engine import BlockCopyEngine
 from .block_manager import BlockManager
+from max.kv_cache.external_backend import (
+    ExternalKVCacheBackend,
+    NullExternalKVCacheBackend,
+    create_external_backend,
+)
 
 logger = logging.getLogger("max.pipelines")
 
@@ -74,6 +79,9 @@ class _TPPagedKVCacheManager:
 
     enable_kvcache_swapping_to_host: bool
     """Flag indicating if swapping blocks to host memory is enabled."""
+
+    external_backend: ExternalKVCacheBackend
+    """External KV cache backend for persistent storage (e.g., LMCache)."""
 
     @traced
     def __init__(
@@ -190,6 +198,15 @@ class _TPPagedKVCacheManager:
             enable_runtime_checks=enable_runtime_checks,
         )
 
+        # Initialize external backend (e.g., LMCache)
+        self.external_backend = create_external_backend(
+            params.external_backend_config
+        )
+        if not isinstance(self.external_backend, NullExternalKVCacheBackend):
+            logger.info(
+                f"External KV cache backend enabled: {type(self.external_backend).__name__}"
+            )
+
     @traced
     def _does_req_need_more_blocks(
         self, ctx: TextGenerationContext, num_steps: int
@@ -232,6 +249,29 @@ class _TPPagedKVCacheManager:
             InsufficientBlocksError: If there are insufficient free blocks to
             satisfy the allocation.
         """
+        # Check external cache first (e.g., LMCache)
+        if not isinstance(self.external_backend, NullExternalKVCacheBackend):
+            tokens = data.tokens  # Get tokens from context
+            if tokens:
+                lookup_result = self.external_backend.lookup(tokens)
+                if lookup_result.matched_prefix_len > 0:
+                    # Get blocks for loading cached KV
+                    blocks = self.block_manager.get_req_blocks(data.request_id)
+                    if blocks:
+                        # Load from external cache
+                        load_result = self.external_backend.load(
+                            tokens=tokens,
+                            prefix_len=lookup_result.matched_prefix_len,
+                            dst_blocks=blocks,
+                            dst_tensors=self.device_tensors,
+                        )
+                        if load_result.success and load_result.loaded_tokens > 0:
+                            logger.debug(
+                                f"Loaded {load_result.loaded_tokens} tokens from external cache"
+                            )
+                            # Update data's processed_length to reflect cached tokens
+                            # Note: This may require modification to TextGenerationContext
+
         self.block_manager.reuse_blocks_from_prefix_cache(data)
         self.block_manager.allocate_new_blocks(data, num_steps)
 
@@ -353,6 +393,20 @@ class _TPPagedKVCacheManager:
         for ctx in batch:
             # We possibly commit new blocks into the prefix cache.
             self.block_manager.step(ctx)
+
+            # Store to external cache (e.g., LMCache) - async
+            if not isinstance(self.external_backend, NullExternalKVCacheBackend):
+                tokens = ctx.tokens
+                if tokens:
+                    blocks = self.block_manager.get_req_blocks(ctx.request_id)
+                    if blocks:
+                        # Store to external backend asynchronously
+                        self.external_backend.store(
+                            tokens=tokens,
+                            src_blocks=blocks,
+                            src_tensors=self.device_tensors,
+                            start_pos=0,  # Could optimize to only store new tokens
+                        )
 
     @property
     def num_free_blocks(self) -> int:

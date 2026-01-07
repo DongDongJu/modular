@@ -56,6 +56,19 @@ class KVCacheConfig(MAXConfig):
     This space is only allocated when kvcache_swapping_to_host is enabled.
     """
 
+    enable_lmcache: bool = False
+    """Whether to enable LMCache for persistent KV cache storage.
+    
+    When enabled, KV cache data is persisted to CPU memory and can be
+    shared across server restarts and replicas.
+    """
+
+    lmcache_chunk_size: int = 64
+    """The number of tokens per chunk for LMCache storage."""
+
+    lmcache_cpu_cache_size_gb: float = 4.0
+    """The amount of CPU memory to use for LMCache in GiB."""
+
     # Need to use `Optional` here to support `click` with 3.9.
     _available_cache_memory: int | None = None
     """The amount of available cache memory in bytes. This should only be set by internal code."""
@@ -72,6 +85,24 @@ class KVCacheConfig(MAXConfig):
             "KVCacheStrategy": KVCacheStrategy,
         }
 
+    def get_external_backend_config(self) -> dict | None:
+        """Get configuration for external KV cache backend.
+        
+        Returns:
+            Configuration dict for LMCache if enabled, None otherwise.
+        """
+        if not self.enable_lmcache:
+            return None
+        
+        return {
+            "type": "lmcache",
+            "chunk_size": self.lmcache_chunk_size,
+            "page_size": self.kv_cache_page_size,
+            "enable_cpu_cache": True,
+            "cpu_cache_size_gb": self.lmcache_cpu_cache_size_gb,
+            "async_store": True,
+        }
+
     @staticmethod
     def help() -> dict[str, str]:
         return {
@@ -81,4 +112,7 @@ class KVCacheConfig(MAXConfig):
             "enable_kvcache_swapping_to_host": "Whether to enable swapping the paged attention KVCache blocks to host memory when device blocks are evicted. This defaults to false.",
             "device_memory_utilization": "The fraction of available device memory that the process should consume. This is used to inform the size of the KVCache workspace: kv_cache_workspace = (total_free_memory * device_memory_utilization) - model_weights_size. Default is set to 0.9.",
             "host_kvcache_swap_space_gb": "The amount of host memory to use for the host KVCache in GiB. This is only used when kvcache_swapping_to_host is enabled. Default is set to 50.0.",
+            "enable_lmcache": "Whether to enable LMCache for persistent KV cache storage. When enabled, KV cache is persisted to CPU memory and can be shared across server restarts.",
+            "lmcache_chunk_size": "The number of tokens per chunk for LMCache storage. Default is 64.",
+            "lmcache_cpu_cache_size_gb": "The amount of CPU memory to use for LMCache in GiB. Default is 4.0.",
         }

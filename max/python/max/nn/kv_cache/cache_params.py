@@ -115,6 +115,21 @@ class KVCacheParams:
     n_kv_heads_per_device: int = 0
     """Number of KV heads allocated to each device. Computed automatically in __post_init__."""
 
+    external_backend_config: dict | None = None
+    """Configuration for external KV cache backend (e.g., LMCache).
+    
+    If provided, enables integration with external cache systems for
+    persistent KV cache storage and cross-replica sharing.
+    
+    Example:
+        >>> external_backend_config = {
+        ...     "type": "lmcache",
+        ...     "chunk_size": 64,
+        ...     "enable_cpu_cache": True,
+        ...     "cpu_cache_size_gb": 4.0,
+        ... }
+    """
+
     def __post_init__(self):
         """Validates configuration and computes derived fields after initialization.
 
@@ -434,6 +449,7 @@ class KVCacheParams:
             devices=devices_per_replica[0],
             is_mla=self.is_mla,
             data_parallel_degree=1,
+            external_backend_config=self.external_backend_config,
         )
 
     def _get_symbolic_inputs_for_replica(
