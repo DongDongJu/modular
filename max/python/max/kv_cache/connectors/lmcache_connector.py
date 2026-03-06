@@ -357,6 +357,11 @@ class MAXGPUConnector(GPUConnectorInterface):
             [self._kv_dim, self._num_layers, num_tokens, self._hidden_dim]
         )
 
+    @property
+    def kv_dtype(self) -> torch.dtype:
+        """Return the torch dtype used for LMCache transfer buffers."""
+        return self._kv_dtype
+
     def from_gpu(
         self, memory_obj: MemoryObj, start: int, end: int, **kwargs: Any
     ) -> None:

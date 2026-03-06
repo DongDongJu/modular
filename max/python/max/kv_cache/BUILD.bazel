@@ -10,6 +10,7 @@ modular_py_library(
         # They are intentionally excluded so the MAX package does not depend on them.
         "lmcache",
         "torch",
+        "zmq",
     ],
     deps = [
         requirement("numpy"),

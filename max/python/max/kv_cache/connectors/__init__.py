@@ -17,6 +17,7 @@
 - `LocalConnector`: Host memory offloading
 - `TieredConnector`: GPU <-> CPU <-> Disk offloading
 - `LMCacheConnector`: LMCache integration for tiered external caching
+- `LMCacheMPConnector`: LMCache multiprocess integration
 - `create_connector()`: Factory function
 """
 
@@ -25,7 +26,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 
-from max.driver import Buffer, Device
+from max.driver import Device
 from max.engine import InferenceSession
 from max.kv_cache.kv_connector import KVConnector
 from max.nn.kv_cache import KVCacheBuffer, KVCacheParams
@@ -35,6 +36,22 @@ from .null_connector import NullConnector
 from .tiered_connector import TieredConnector
 
 logger = logging.getLogger("max.pipelines")
+
+
+def _load_optional_connector(
+    module: str,
+    class_name: str,
+    install_hint: str,
+) -> type[KVConnector]:
+    """Load an optional connector class and surface a clear install hint."""
+    try:
+        connector_module = __import__(
+            f"{__name__}.{module}",
+            fromlist=[class_name],
+        )
+        return getattr(connector_module, class_name)
+    except ImportError as exc:
+        raise ImportError(install_hint) from exc
 
 
 def create_connector(
@@ -48,6 +65,7 @@ def create_connector(
     """Create a KV cache connector instance.
 
     Returns a connector appropriate for the configuration:
+    - If `params.lmcache_mp_enabled` is set: LMCacheMPConnector
     - If `params.lmcache_config_file` is set: LMCacheConnector
     - If swapping enabled + disk_offload_dir set: TieredConnector
     - If swapping enabled (no disk): LocalConnector
@@ -65,15 +83,35 @@ def create_connector(
         A connector instance implementing KVConnectorProtocol.
     """
     # TODO: SERVOPT-1020
-    # Check for LMCache configuration
+    # Check for LMCache MP configuration first.
+    if params.lmcache_mp_enabled:
+        LMCacheMPConnector = _load_optional_connector(
+            module="lmcache_mp_connector",
+            class_name="LMCacheMPConnector",
+            install_hint=(
+                "lmcache, torch, and zmq are required for LMCache MP integration. "
+                "Install them with: pip install lmcache torch pyzmq"
+            ),
+        )
+
+        return LMCacheMPConnector(
+            params=params,
+            devices=devices,
+            device_buffer=device_buffer,
+            total_num_blocks=total_num_blocks,
+            session=session,
+        )
+
+    # Check for standard LMCache configuration.
     if params.lmcache_config_file:
-        try:
-            from .lmcache_connector import LMCacheConnector
-        except ImportError as e:
-            raise ImportError(
+        LMCacheConnector = _load_optional_connector(
+            module="lmcache_connector",
+            class_name="LMCacheConnector",
+            install_hint=(
                 "lmcache and torch are required for LMCache integration. "
                 "Install them with: pip install lmcache torch"
-            ) from e
+            ),
+        )
 
         return LMCacheConnector(
             params=params,
@@ -117,6 +155,7 @@ def create_connector(
 __all__ = [
     "KVConnector",
     "LMCacheConnector",
+    "LMCacheMPConnector",
     "LocalConnector",
     "NullConnector",
     "TieredConnector",
