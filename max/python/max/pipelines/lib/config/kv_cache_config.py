@@ -116,6 +116,50 @@ class KVCacheConfig(ConfigFileModel):
     )
     """The path to an LMCache YAML configuration file."""
 
+    lmcache_mp_enabled: bool = Field(
+        default=False,
+        description="Enable LMCache multiprocess connector mode.",
+    )
+
+    lmcache_mp_host: str = Field(
+        default="tcp://127.0.0.1",
+        description="LMCache MP server host URL.",
+    )
+
+    lmcache_mp_port: int = Field(
+        default=5555,
+        description="LMCache MP server port.",
+    )
+
+    lmcache_mp_request_timeout_ms: int = Field(
+        default=3000,
+        description="LMCache MP request timeout in milliseconds.",
+    )
+
+    lmcache_mp_register_timeout_ms: int = Field(
+        default=5000,
+        description="LMCache MP registration timeout in milliseconds.",
+    )
+
+    lmcache_mp_min_retrieve_tokens: int | None = Field(
+        default=None,
+        description=(
+            "Optional minimum token threshold before performing MP retrieve."
+        ),
+    )
+
+    lmcache_mp_fail_open: bool = Field(
+        default=True,
+        description=(
+            "Whether to continue request processing if LMCache MP fails."
+        ),
+    )
+
+    lmcache_mp_hash_algorithm: str = Field(
+        default="blake3",
+        description="Hash algorithm name used for MP cache keys.",
+    )
+
     # Need to use `Optional` here to support `click` with 3.9.
     _available_cache_memory: int | None = PrivateAttr(default=None)
     """The amount of available cache memory in bytes. This should only be set by internal code."""
@@ -181,4 +225,12 @@ class KVCacheConfig(ConfigFileModel):
             disk_offload_max_gb=self.disk_offload_max_gb,
             disk_offload_direct_io=self.disk_offload_direct_io,
             lmcache_config_file=self.lmcache_config_file,
+            lmcache_mp_enabled=self.lmcache_mp_enabled,
+            lmcache_mp_host=self.lmcache_mp_host,
+            lmcache_mp_port=self.lmcache_mp_port,
+            lmcache_mp_request_timeout_ms=self.lmcache_mp_request_timeout_ms,
+            lmcache_mp_register_timeout_ms=self.lmcache_mp_register_timeout_ms,
+            lmcache_mp_min_retrieve_tokens=self.lmcache_mp_min_retrieve_tokens,
+            lmcache_mp_fail_open=self.lmcache_mp_fail_open,
+            lmcache_mp_hash_algorithm=self.lmcache_mp_hash_algorithm,
         )

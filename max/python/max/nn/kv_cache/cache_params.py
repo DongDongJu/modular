@@ -232,6 +232,30 @@ class KVCacheParams(KVCacheParamInterface):
     lmcache_config_file: str | None = None
     """Path to LMCache YAML config file. Enables LMCache external KV cache tiering."""
 
+    lmcache_mp_enabled: bool = False
+    """Enable LMCache multiprocess connector mode."""
+
+    lmcache_mp_host: str = "tcp://127.0.0.1"
+    """LMCache MP server host URL (ZMQ transport prefix included)."""
+
+    lmcache_mp_port: int = 5555
+    """LMCache MP server port."""
+
+    lmcache_mp_request_timeout_ms: int = 3000
+    """Request timeout for LMCache MP transport."""
+
+    lmcache_mp_register_timeout_ms: int = 5000
+    """Registration timeout for LMCache MP transport."""
+
+    lmcache_mp_min_retrieve_tokens: int | None = None
+    """Optional retrieve threshold override for MP mode."""
+
+    lmcache_mp_fail_open: bool = True
+    """Whether to keep serving requests when LMCache MP path fails."""
+
+    lmcache_mp_hash_algorithm: str = "blake3"
+    """Stable key hash algorithm identifier used in MP mode."""
+
     def __post_init__(self):
         """Validates configuration and computes derived fields after initialization.
 
@@ -285,6 +309,31 @@ class KVCacheParams(KVCacheParamInterface):
             raise ValueError(
                 "host_kvcache_swap_space_gb is required when kvcache_swapping_to_host is enabled"
             )
+
+        if self.lmcache_mp_enabled:
+            if not self.enable_prefix_caching:
+                raise ValueError(
+                    "LMCache MP mode requires prefix caching to be enabled"
+                )
+            if self.lmcache_mp_port <= 0:
+                raise ValueError(
+                    f"Invalid lmcache_mp_port={self.lmcache_mp_port}"
+                )
+            if self.lmcache_mp_request_timeout_ms <= 0:
+                raise ValueError(
+                    "lmcache_mp_request_timeout_ms must be > 0"
+                )
+            if self.lmcache_mp_register_timeout_ms <= 0:
+                raise ValueError(
+                    "lmcache_mp_register_timeout_ms must be > 0"
+                )
+            if (
+                self.lmcache_mp_min_retrieve_tokens is not None
+                and self.lmcache_mp_min_retrieve_tokens < 0
+            ):
+                raise ValueError(
+                    "lmcache_mp_min_retrieve_tokens must be >= 0 when set"
+                )
 
         if self.quantized_kv_cache and self.kvcache_quant_config is not None:
             # Validate FP8 KVCache quantization granularity.
@@ -445,6 +494,14 @@ class KVCacheParams(KVCacheParamInterface):
             disk_offload_max_gb=self.disk_offload_max_gb,
             disk_offload_direct_io=self.disk_offload_direct_io,
             lmcache_config_file=self.lmcache_config_file,
+            lmcache_mp_enabled=self.lmcache_mp_enabled,
+            lmcache_mp_host=self.lmcache_mp_host,
+            lmcache_mp_port=self.lmcache_mp_port,
+            lmcache_mp_request_timeout_ms=self.lmcache_mp_request_timeout_ms,
+            lmcache_mp_register_timeout_ms=self.lmcache_mp_register_timeout_ms,
+            lmcache_mp_min_retrieve_tokens=self.lmcache_mp_min_retrieve_tokens,
+            lmcache_mp_fail_open=self.lmcache_mp_fail_open,
+            lmcache_mp_hash_algorithm=self.lmcache_mp_hash_algorithm,
         )
 
     def _get_symbolic_inputs_for_replica(
