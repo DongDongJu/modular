@@ -83,6 +83,32 @@ def create_connector(
         )
 
     if connector == KVConnectorType.lmcache:
+        cfg = params.kv_connector_config
+        lmcache_mode = None
+        if cfg is not None and cfg.model_extra:
+            lmcache_mode = cfg.model_extra.get("lmcache_mode")
+        if lmcache_mode == "mp":
+            try:
+                from .lmcache_mp_connector import LMCacheMPConnector
+            except ImportError as e:
+                raise ImportError(
+                    "LMCache MP integration requires torch, pyzmq, and an "
+                    "LMCache build that includes Modular MAX MP support."
+                ) from e
+
+            return LMCacheMPConnector(
+                params=params,
+                devices=devices,
+                device_buffer=device_buffer,
+                total_num_blocks=total_num_blocks,
+                session=session,
+            )
+        if lmcache_mode not in (None, "local"):
+            raise ValueError(
+                "kv_connector_config.lmcache_mode must be 'local' or 'mp' "
+                f"when kv_connector is 'lmcache', got {lmcache_mode!r}"
+            )
+
         try:
             from .lmcache_connector import LMCacheConnector
         except ImportError as e:
@@ -141,6 +167,7 @@ __all__ = [
     "KVConnector",
     "KVConnectorType",
     "LMCacheConnector",
+    "LMCacheMPConnector",
     "LocalConnector",
     "NullConnector",
     "TieredConnector",

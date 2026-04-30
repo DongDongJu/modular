@@ -59,6 +59,20 @@ class KVConnector(Protocol):
         """
         ...
 
+    def lookup_with_tokens(
+        self,
+        ctx: TextGenerationContext,
+        block_hashes: list[int],
+        token_start: int,
+    ) -> int:
+        """Look up blocks with token-position context when a connector needs it.
+
+        Token-aware connectors can override this method. The default preserves
+        the block-hash-only connector contract used by existing local tiers.
+        """
+        del token_start
+        return self.lookup(ctx, block_hashes)
+
     def load(
         self,
         ctx: TextGenerationContext,
@@ -92,6 +106,26 @@ class KVConnector(Protocol):
                 to their predecessor within the sequence.
         """
         ...
+
+    def save_with_tokens(
+        self,
+        ctx: TextGenerationContext,
+        block_ids: list[int],
+        block_hashes: list[int],
+        token_start: int,
+        parent_seq_hash: int = 0,
+    ) -> None:
+        """Queue blocks for save with token-position context when needed.
+
+        Token-aware connectors can override this method. The default preserves
+        the existing save behavior for block-hash-only connectors.
+        """
+        del ctx, token_start
+        self.save(
+            block_ids,
+            block_hashes,
+            parent_seq_hash=parent_seq_hash,
+        )
 
     def sync(self) -> None:
         """Wait for pending loads to complete."""

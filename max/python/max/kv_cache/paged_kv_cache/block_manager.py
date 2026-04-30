@@ -255,30 +255,85 @@ class BlockManager:
         return 0
 
     @traced
+    def _connector_lookup(
+        self,
+        ctx: TextGenerationContext,
+        desired_hashes: list[int],
+        token_start: int,
+    ) -> int:
+        lookup_with_tokens = getattr(
+            self.connector,
+            "lookup_with_tokens",
+            None,
+        )
+        if callable(lookup_with_tokens):
+            return lookup_with_tokens(ctx, desired_hashes, token_start)
+        return KVConnector.lookup_with_tokens(
+            self.connector,
+            ctx,
+            desired_hashes,
+            token_start,
+        )
+
+    def _connector_save(
+        self,
+        ctx: TextGenerationContext,
+        block_ids: list[int],
+        block_hashes: list[int],
+        token_start: int,
+        parent_seq_hash: int,
+    ) -> None:
+        save_with_tokens = getattr(self.connector, "save_with_tokens", None)
+        if callable(save_with_tokens):
+            save_with_tokens(
+                ctx,
+                block_ids,
+                block_hashes,
+                token_start,
+                parent_seq_hash=parent_seq_hash,
+            )
+            return
+        KVConnector.save_with_tokens(
+            self.connector,
+            ctx,
+            block_ids,
+            block_hashes,
+            token_start,
+            parent_seq_hash=parent_seq_hash,
+        )
+
     def _count_full_blocks_from_prefix_cache(
-        self, ctx: TextGenerationContext, desired_hashes: list[int]
+        self,
+        ctx: TextGenerationContext,
+        desired_hashes: list[int],
+        token_start: int,
     ) -> int:
         """Returns the count of device and host blocks with the desired hashes."""
         # Count the number of device block hashes that are in the device prefix cache.
         device_prefix_cache = self.device_block_pool.hash_to_committed_block
 
-        device_prefix_cache_hits = []
-        desired_host_hashes = []
+        device_prefix_cache_hit_count = 0
         for hash_value in desired_hashes:
             if hash_value in device_prefix_cache:
                 # Device hashes with prefix cache hit
-                device_prefix_cache_hits.append(hash_value)
+                device_prefix_cache_hit_count += 1
             else:
-                # Record potential host hash
-                desired_host_hashes.append(hash_value)
+                break
 
-        device_prefix_cache_hit_count = len(device_prefix_cache_hits)
+        desired_host_hashes = desired_hashes[device_prefix_cache_hit_count:]
+        host_token_start = (
+            token_start + device_prefix_cache_hit_count * self.block_size
+        )
 
         # Count host cache hits via connector (if any host blocks are available).
         host_prefix_cache_hit_count = 0
         if self.connector.num_host_blocks > 0 and desired_host_hashes:
             # Query connector for how many tokens are available from host cache.
-            available_tokens = self.connector.lookup(ctx, desired_host_hashes)
+            available_tokens = self._connector_lookup(
+                ctx,
+                desired_host_hashes,
+                host_token_start,
+            )
             available_blocks = available_tokens // self.block_size
             # Limit by available device blocks for loading.
             host_prefix_cache_hit_count = min(
@@ -312,6 +367,7 @@ class BlockManager:
         self,
         ctx: TextGenerationContext,
         desired_hashes: list[int],
+        token_start: int,
     ) -> list[KVCacheBlock]:
         """Returns a list of device blocks with the desired hashes.
 
@@ -322,7 +378,11 @@ class BlockManager:
             return []
 
         # Query connector for available blocks from host cache.
-        available_tokens = self.connector.lookup(ctx, desired_hashes)
+        available_tokens = self._connector_lookup(
+            ctx,
+            desired_hashes,
+            token_start,
+        )
         num_available_blocks = available_tokens // self.block_size
 
         if num_available_blocks == 0:
@@ -381,7 +441,9 @@ class BlockManager:
         uncommitted_hashes = req_hashes[num_committed_blocks:]
 
         return self._count_full_blocks_from_prefix_cache(
-            ctx, uncommitted_hashes
+            ctx,
+            uncommitted_hashes,
+            num_committed_blocks * self.block_size,
         )
 
     @traced
@@ -413,8 +475,13 @@ class BlockManager:
             uncommitted_hashes = uncommitted_hashes[len(device_blocks) :]
 
         # query the host prefix cache for full blocks via connector
+        host_token_start = (
+            num_committed_blocks + len(device_blocks)
+        ) * self.block_size
         host_blocks = self._get_full_blocks_from_host_prefix_cache(
-            ctx, uncommitted_hashes
+            ctx,
+            uncommitted_hashes,
+            host_token_start,
         )
         return device_blocks + host_blocks
 
@@ -452,6 +519,7 @@ class BlockManager:
         )
         run_bids: list[int] = []
         run_hashes: list[int] = []
+        run_start_block_idx = num_committed_blocks
         for block_idx in range(num_committed_blocks, num_computed_blocks):
             block = req_blocks[block_idx]
             block_hash = req_hashes[block_idx]
@@ -462,19 +530,30 @@ class BlockManager:
             if new_block is not None:
                 req_blocks[block_idx] = new_block
                 if run_bids:
-                    self.connector.save(
-                        run_bids, run_hashes, parent_seq_hash=current_parent
+                    self._connector_save(
+                        ctx,
+                        run_bids,
+                        run_hashes,
+                        run_start_block_idx * self.block_size,
+                        parent_seq_hash=current_parent,
                     )
                     run_bids = []
                     run_hashes = []
                 current_parent = block_hash
+                run_start_block_idx = block_idx + 1
             else:
+                if not run_bids:
+                    run_start_block_idx = block_idx
                 run_bids.append(block.bid)
                 run_hashes.append(block_hash)
 
         if run_bids:
-            self.connector.save(
-                run_bids, run_hashes, parent_seq_hash=current_parent
+            self._connector_save(
+                ctx,
+                run_bids,
+                run_hashes,
+                run_start_block_idx * self.block_size,
+                parent_seq_hash=current_parent,
             )
 
         # Update committed index managed by BlockManager.

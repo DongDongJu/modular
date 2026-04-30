@@ -24,6 +24,17 @@ from max.nn.kv_cache.cache_params import (
 )
 from pydantic import ConfigDict, Field, PrivateAttr
 
+_LMCACHE_MP_ONLY_CONFIG_KEYS = frozenset(
+    {
+        "lmcache_mode",
+        "lmcache_model_name",
+        "lmcache_mp_host",
+        "lmcache_mp_port",
+        "lmcache_mp_server_url",
+        "lmcache_mp_timeout_s",
+    }
+)
+
 
 class KVConnectorConfig(ConfigFileModel):
     """Connector-specific configuration for KV cache connectors.
@@ -87,7 +98,19 @@ class KVConnectorConfig(ConfigFileModel):
 
         Filters out the typed fields defined on this class so the result
         can be passed directly to ``LMCacheEngineConfig.from_defaults()``.
+        MP-selection keys are handled by the connector factory and are not
+        valid local-mode ``LMCacheEngineConfig`` fields.
         """
+        if not self.model_extra:
+            return {}
+        return {
+            key: value
+            for key, value in self.model_extra.items()
+            if key not in _LMCACHE_MP_ONLY_CONFIG_KEYS
+        }
+
+    def as_lmcache_mp_config(self) -> dict[str, object]:
+        """Returns the raw LMCache MP connector fields."""
         return dict(self.model_extra) if self.model_extra else {}
 
 
