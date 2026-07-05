@@ -506,7 +506,9 @@ class LMCacheMPConnector:
             self._pending_futures.clear()
             self._pending_end_sessions.clear()
             self._mq_client.close()
-            self._ctx.term()
+            # destroy() rather than term(): term() blocks forever on sockets
+            # the MP client leaves open on this context.
+            self._ctx.destroy(linger=0)
             self._is_shutdown = True
 
     @property
@@ -554,21 +556,23 @@ class LMCacheMPConnector:
                 f"{self._server_url} within {self._timeout_s}s."
             ) from e
 
+    def _layout_hints(self) -> dict[str, object]:
+        return {
+            "layout_format": _MAX_LAYOUT_FORMAT,
+            "num_layers": self.params.num_layers,
+            "kv_dim": 1 if self.params.is_mla else 2,
+            "tokens_per_block": self.params.page_size,
+            "page_size": self.params.page_size,
+            "num_kv_heads": self.params.n_kv_heads_per_device,
+            "head_dim": self.params.head_dim,
+            "total_num_blocks": self._total_num_blocks,
+        }
+
     def _register_kv_caches(self) -> None:
         for worker_id, (device, instance_id) in enumerate(
             zip(self._devices, self._instance_ids, strict=True)
         ):
             descriptor = self._export_buffer_descriptor(worker_id, device)
-            layout_hints: dict[str, object] = {
-                "layout_format": _MAX_LAYOUT_FORMAT,
-                "num_layers": self.params.num_layers,
-                "kv_dim": 1 if self.params.is_mla else 2,
-                "tokens_per_block": self.params.page_size,
-                "page_size": self.params.page_size,
-                "num_kv_heads": self.params.n_kv_heads_per_device,
-                "head_dim": self.params.head_dim,
-                "total_num_blocks": self._total_num_blocks,
-            }
             self._request(
                 RequestType.REGISTER_KV_CACHE,
                 [
@@ -577,7 +581,7 @@ class LMCacheMPConnector:
                     self._model_name,
                     self._world_size,
                     EngineType.MAX,
-                    layout_hints,
+                    self._layout_hints(),
                 ],
             ).result(timeout=self._timeout_s)
 
@@ -616,14 +620,7 @@ class LMCacheMPConnector:
             storage_offset_bytes=tensor.storage_offset()
             * tensor.element_size(),
             layout_format=_MAX_LAYOUT_FORMAT,
-            layout_hints={
-                "num_layers": self.params.num_layers,
-                "kv_dim": 1 if self.params.is_mla else 2,
-                "tokens_per_block": self.params.page_size,
-                "num_kv_heads": self.params.n_kv_heads_per_device,
-                "head_dim": self.params.head_dim,
-                "total_num_blocks": self._total_num_blocks,
-            },
+            layout_hints=self._layout_hints(),
         )
 
     def _token_prefix(
@@ -723,5 +720,15 @@ class LMCacheMPConnector:
             return False
         if device_id is not None:
             event = torch.cuda.Event.from_ipc_handle(device_id, event_handle)
-            event.synchronize()
+            # Bounded wait: event.synchronize() has no timeout, and a
+            # server-side stream stall would hang the engine forever.
+            deadline = time.monotonic() + self._timeout_s
+            while not event.query():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "LMCache MP completion event for request "
+                        f"{request_id!r} did not fire within "
+                        f"{self._timeout_s}s"
+                    )
+                time.sleep(0.001)
         return True

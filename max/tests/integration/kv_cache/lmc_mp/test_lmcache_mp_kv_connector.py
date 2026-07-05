@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import os
 import socket
+import subprocess
+import sys
+import time
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from contextlib import closing, contextmanager
@@ -72,49 +75,83 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+_SERVER_SCRIPT = """
+import signal
+
+from lmcache.v1.distributed.config import (
+    EvictionConfig,
+    L1ManagerConfig,
+    L1MemoryManagerConfig,
+    StorageManagerConfig,
+)
+from lmcache.v1.mp_observability.config import ObservabilityConfig
+from lmcache.v1.multiprocess.config import MPServerConfig
+from lmcache.v1.multiprocess.server import run_cache_server
+
+server, engine = run_cache_server(
+    mp_config=MPServerConfig(
+        host="127.0.0.1",
+        port={port},
+        chunk_size={chunk_size},
+        max_workers=1,
+        max_gpu_workers=1,
+        max_cpu_workers=1,
+    ),
+    storage_manager_config=StorageManagerConfig(
+        l1_manager_config=L1ManagerConfig(
+            memory_config=L1MemoryManagerConfig(
+                size_in_bytes=64 * 1024 * 1024,
+                use_lazy=True,
+                init_size_in_bytes=64 * 1024 * 1024,
+            )
+        ),
+        eviction_config=EvictionConfig(eviction_policy="LRU"),
+    ),
+    obs_config=ObservabilityConfig(
+        enabled=False,
+        metrics_enabled=False,
+        logging_enabled=False,
+    ),
+    return_engine=True,
+)
+try:
+    signal.pause()
+finally:
+    server.close()
+    engine.close()
+"""
+
+
+def _wait_for_port(port: int, timeout_s: float = 60.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with closing(socket.create_connection(("127.0.0.1", port), 1.0)):
+                return
+        except OSError:
+            time.sleep(0.2)
+    raise TimeoutError(f"LMCache MP server did not listen on port {port}")
+
+
 @contextmanager
 def _lmcache_mp_server(port: int) -> Generator[None, None, None]:
-    from lmcache.v1.distributed.config import (
-        EvictionConfig,
-        L1ManagerConfig,
-        L1MemoryManagerConfig,
-        StorageManagerConfig,
-    )
-    from lmcache.v1.mp_observability.config import ObservabilityConfig
-    from lmcache.v1.multiprocess.config import MPServerConfig
-    from lmcache.v1.multiprocess.server import run_cache_server
+    """Run the LMCache MP server in a separate process.
 
-    server, engine = run_cache_server(
-        mp_config=MPServerConfig(
-            host="127.0.0.1",
-            port=port,
-            chunk_size=INTEGRATION_PAGE_SIZE,
-            max_workers=1,
-            max_gpu_workers=1,
-            max_cpu_workers=1,
-        ),
-        storage_manager_config=StorageManagerConfig(
-            l1_manager_config=L1ManagerConfig(
-                memory_config=L1MemoryManagerConfig(
-                    size_in_bytes=64 * 1024 * 1024,
-                    use_lazy=True,
-                    init_size_in_bytes=64 * 1024 * 1024,
-                )
-            ),
-            eviction_config=EvictionConfig(eviction_policy="LRU"),
-        ),
-        obs_config=ObservabilityConfig(
-            enabled=False,
-            metrics_enabled=False,
-            logging_enabled=False,
-        ),
-        return_engine=True,
-    )
+    CUDA IPC memory handles cannot be opened by the process that exported
+    them, so the server must not share a process with the MAX client.
+    """
+    script = _SERVER_SCRIPT.format(port=port, chunk_size=INTEGRATION_PAGE_SIZE)
+    proc = subprocess.Popen([sys.executable, "-c", script])
     try:
+        _wait_for_port(port)
         yield
     finally:
-        server.close()
-        engine.close()
+        proc.terminate()
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=15)
 
 
 def _mp_config(port: int) -> Any:
