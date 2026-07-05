@@ -254,7 +254,6 @@ class BlockManager:
             ctx.cached_prefix_length = 0
         return 0
 
-    @traced
     def _connector_lookup(
         self,
         ctx: TextGenerationContext,
@@ -268,12 +267,7 @@ class BlockManager:
         )
         if callable(lookup_with_tokens):
             return lookup_with_tokens(ctx, desired_hashes, token_start)
-        return KVConnector.lookup_with_tokens(
-            self.connector,
-            ctx,
-            desired_hashes,
-            token_start,
-        )
+        return self.connector.lookup(ctx, desired_hashes)
 
     def _connector_save(
         self,
@@ -293,15 +287,13 @@ class BlockManager:
                 parent_seq_hash=parent_seq_hash,
             )
             return
-        KVConnector.save_with_tokens(
-            self.connector,
-            ctx,
+        self.connector.save(
             block_ids,
             block_hashes,
-            token_start,
             parent_seq_hash=parent_seq_hash,
         )
 
+    @traced
     def _count_full_blocks_from_prefix_cache(
         self,
         ctx: TextGenerationContext,
